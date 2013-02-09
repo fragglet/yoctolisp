@@ -26,8 +26,8 @@ typedef struct _YLispValue {
 #define CDR(val) ((val)->v.cell.cdr)
 
 typedef enum {
-	TOKEN_OPEN_PAREN, TOKEN_CLOSE_PAREN, TOKEN_SYMBOL, TOKEN_QUOTE,
-	TOKEN_NUMBER, TOKEN_STRING, TOKEN_BOOLEAN, TOKEN_ERROR, TOKEN_EOF
+	TOKEN_OPEN_PAREN, TOKEN_CLOSE_PAREN, TOKEN_LITERAL, TOKEN_QUOTE,
+	TOKEN_ERROR, TOKEN_EOF
 } YLispToken;
 
 typedef struct {
@@ -76,7 +76,7 @@ static void print_list(YLispValue *value)
 void ylisp_print(YLispValue *value)
 {
 	if (value == NULL) {
-		printf("nil");
+		printf("()");
 	} else switch (value->type) {
 		case YLISP_CELL:
 			print_list(value);
@@ -153,7 +153,7 @@ static YLispToken ylisp_read_string(YLispLexer *lexer)
 
 	lexer->value = string_from_data(lexer->buffer + start,
 	                                lexer->position - start);
-	return TOKEN_STRING;
+	return TOKEN_LITERAL;
 }
 
 YLispToken ylisp_read_token(YLispLexer *lexer)
@@ -184,7 +184,7 @@ YLispToken ylisp_read_token(YLispLexer *lexer)
 			if (c != 't' && c != 'f')
 				return TOKEN_ERROR;
 			++lexer->position;
-			return TOKEN_BOOLEAN;
+			return TOKEN_LITERAL;
 		case '"': return ylisp_read_string(lexer);
 		default: --lexer->position; break;
 	}
@@ -196,14 +196,14 @@ YLispToken ylisp_read_token(YLispLexer *lexer)
 			lexer->value->v.i = lexer->value->v.i * 10 + (c - '0');
 			++lexer->position;
 		}
-		return TOKEN_NUMBER;
+		return TOKEN_LITERAL;
 	} else if (is_sym_char(c)) {
 		unsigned int start = lexer->position;
 		while (c != '\0' && is_sym_char(c))
 			++lexer->position;
 		lexer->value = ylisp_symbol_for_name(lexer->buffer + start,
 		                                     lexer->position - start);
-		return TOKEN_SYMBOL;
+		return TOKEN_LITERAL;
 	} else {
 		return TOKEN_ERROR;
 	}
@@ -247,10 +247,7 @@ static YLispValue *parse_from_token(YLispLexer *lexer, YLispToken token)
 			return parse_list(lexer);
 		case TOKEN_QUOTE:
 			return parse_quoted(lexer);
-		case TOKEN_NUMBER:
-		case TOKEN_STRING:
-		case TOKEN_BOOLEAN:
-		case TOKEN_SYMBOL:
+		case TOKEN_LITERAL:
 			return lexer->value;
 		case TOKEN_EOF:
 		case TOKEN_ERROR:
