@@ -22,6 +22,8 @@ typedef struct _YLispValue {
 	} v;
 	struct _YLispValue *next;
 } YLispValue;
+#define CAR(val) ((val)->v.cell.car)
+#define CDR(val) ((val)->v.cell.cdr)
 
 typedef enum {
 	TOKEN_OPEN_PAREN, TOKEN_CLOSE_PAREN, TOKEN_SYMBOL, TOKEN_QUOTE,
@@ -49,14 +51,21 @@ YLispValue *ylisp_value(YLispValueType type)
 	return result;
 }
 
+static YLispValue *ylisp_cons(YLispValue *car, YLispValue *cdr)
+{
+	YLispValue *result = ylisp_value(YLISP_CELL);
+	CAR(result) = car; CDR(result) = cdr;
+	return result;
+}
+
 void ylisp_print(YLispValue *value);
 
 static void print_list(YLispValue *value)
 {
 	printf("(");
 	while (value != NULL) {
-		ylisp_print(value->v.cell.car);
-		value = value->v.cell.cdr;
+		ylisp_print(CAR(value));
+		value = CDR(value);
 		if (value != NULL) {
 			printf(" ");
 		}
@@ -135,7 +144,6 @@ static int is_sym_char(unsigned char c)
 static YLispToken ylisp_read_string(YLispLexer *lexer)
 {
 	unsigned int start = lexer->position;
-	unsigned char *s;
 
 	while (c != '\0' && c != '"') {
 		++lexer->position;
@@ -216,8 +224,8 @@ static YLispValue *parse_list(YLispLexer *lexer)
 		if (token == TOKEN_CLOSE_PAREN)
 			break;
 		*rover = ylisp_value(YLISP_CELL);
-		(*rover)->v.cell.car = parse_from_token(lexer, token);
-		rover = &(*rover)->v.cell.cdr;
+		CAR(*rover) = parse_from_token(lexer, token);
+		rover = &CDR(*rover);
 	}
 
 	*rover = NULL;  // end of list
@@ -227,16 +235,9 @@ static YLispValue *parse_list(YLispLexer *lexer)
 static YLispValue *parse_quoted(YLispLexer *lexer)
 {
 	YLispToken token = ylisp_read_token(lexer);
-	YLispValue *cell1, *cell2;
 
-	cell1 = ylisp_value(YLISP_CELL);
-	cell1->v.cell.car = ylisp_symbol_for_name("quote", 5);
-	cell1->v.cell.cdr = cell2 = ylisp_value(YLISP_CELL);
-
-	cell2->v.cell.car = parse_from_token(lexer, token);
-	cell2->v.cell.cdr = NULL;
-
-	return cell1;
+	return ylisp_cons(ylisp_symbol_for_name("quote", 5),
+	    ylisp_cons(parse_from_token(lexer, token), NULL));
 }
 
 static YLispValue *parse_from_token(YLispLexer *lexer, YLispToken token)
@@ -254,8 +255,9 @@ static YLispValue *parse_from_token(YLispLexer *lexer, YLispToken token)
 		case TOKEN_EOF:
 		case TOKEN_ERROR:
 		case TOKEN_CLOSE_PAREN:
-			return NULL;
+			break;
 	}
+	return NULL;
 }
 
 YLispValue *ylisp_parse(char *input)
