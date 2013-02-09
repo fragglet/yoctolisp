@@ -25,12 +25,11 @@ typedef struct _YLispValue {
 
 typedef enum {
 	TOKEN_OPEN_PAREN, TOKEN_CLOSE_PAREN, TOKEN_SYMBOL, TOKEN_QUOTE,
-	TOKEN_NUMBER, TOKEN_STRING, TOKEN_BOOLEAN, TOKEN_ERROR,
+	TOKEN_NUMBER, TOKEN_STRING, TOKEN_BOOLEAN, TOKEN_ERROR, TOKEN_EOF
 } YLispToken;
 
 typedef struct {
 	unsigned char *buffer;
-	size_t buffer_len;
 	unsigned int position;
 	YLispValue *value;
 } YLispLexer;
@@ -50,10 +49,29 @@ YLispValue *ylisp_value(YLispValueType type)
 	return result;
 }
 
-void ylisp_value_print(YLispValue *value)
+void ylisp_print(YLispValue *value);
+
+static void print_list(YLispValue *value)
 {
-	switch (value->type) {
-		case YLISP_CELL: break;
+	printf("(");
+	while (value != NULL) {
+		ylisp_print(value->v.cell.car);
+		value = value->v.cell.cdr;
+		if (value != NULL) {
+			printf(" ");
+		}
+	}
+	printf(")");
+}
+
+void ylisp_print(YLispValue *value)
+{
+	if (value == NULL) {
+		printf("nil");
+	} else switch (value->type) {
+		case YLISP_CELL:
+			print_list(value);
+			break;
 		case YLISP_STRING:
 			printf("\"%s\"", value->v.s);
 			break;
@@ -101,10 +119,9 @@ YLispValue *ylisp_symbol_for_name(unsigned char *name, size_t name_len)
 	return symbols[num_symbols++] = result;
 }
 
-void ylisp_init_lexer(YLispLexer *lexer, unsigned char *buf, size_t buf_len)
+void ylisp_init_lexer(YLispLexer *lexer, unsigned char *buf)
 {
 	lexer->buffer = buf;
-	lexer->buffer_len = buf_len;
 	lexer->position = 0;
 }
 
@@ -120,10 +137,10 @@ static YLispToken ylisp_read_string(YLispLexer *lexer)
 	unsigned int start = lexer->position;
 	unsigned char *s;
 
-	while (lexer->position < lexer->buffer_len && c != '"') {
+	while (c != '\0' && c != '"') {
 		++lexer->position;
 	}
-	if (lexer->position >= lexer->buffer_len)
+	if (c == '\0')
 		return TOKEN_ERROR;
 
 	lexer->value = string_from_data(lexer->buffer + start,
@@ -133,10 +150,11 @@ static YLispToken ylisp_read_string(YLispLexer *lexer)
 
 YLispToken ylisp_read_token(YLispLexer *lexer)
 {
-	while (lexer->position < lexer->buffer_len) {
+	while (c != '\0') {
 		if (c == ';') {
 			do {
-				if (++lexer->position >= lexer->buffer_len)
+				++lexer->position;
+				if (c == '\0')
 					return TOKEN_ERROR;
 			} while (c != '\n');
 		} else if (!isspace(c)) {
@@ -145,8 +163,8 @@ YLispToken ylisp_read_token(YLispLexer *lexer)
 		++lexer->position;
 	}
 
-	if (lexer->position >= lexer->buffer_len)
-		return TOKEN_ERROR;
+	if (c == '\0')
+		return TOKEN_EOF;
 
 	switch (lexer->buffer[lexer->position++]) {
 		case '(': return TOKEN_OPEN_PAREN;
@@ -166,14 +184,14 @@ YLispToken ylisp_read_token(YLispLexer *lexer)
 	if (isdigit(c)) {
 		lexer->value = ylisp_value(YLISP_NUMBER);
 		lexer->value->v.i = 0;
-		while (lexer->position < lexer->buffer_len && isdigit(c)) {
+		while (c != '\0' && isdigit(c)) {
 			lexer->value->v.i = lexer->value->v.i * 10 + (c - '0');
 			++lexer->position;
 		}
 		return TOKEN_NUMBER;
 	} else if (is_sym_char(c)) {
 		unsigned int start = lexer->position;
-		while (lexer->position < lexer->buffer_len && is_sym_char(c))
+		while (c != '\0' && is_sym_char(c))
 			++lexer->position;
 		lexer->value = ylisp_symbol_for_name(lexer->buffer + start,
 		                                     lexer->position - start);
@@ -185,24 +203,75 @@ YLispToken ylisp_read_token(YLispLexer *lexer)
 
 #undef c
 
-int main(int argc, char *argv[])
+static YLispValue *parse_from_token(YLispLexer *lexer, YLispToken token);
+
+static YLispValue *parse_list(YLispLexer *lexer)
+{
+	YLispValue *result, **rover=&result;
+
+	for (;;) {
+		YLispToken token = ylisp_read_token(lexer);
+		if (token == TOKEN_EOF || token == TOKEN_ERROR)
+			return NULL;
+		if (token == TOKEN_CLOSE_PAREN)
+			break;
+		*rover = ylisp_value(YLISP_CELL);
+		(*rover)->v.cell.car = parse_from_token(lexer, token);
+		rover = &(*rover)->v.cell.cdr;
+	}
+
+	*rover = NULL;  // end of list
+	return result;
+}
+
+static YLispValue *parse_quoted(YLispLexer *lexer)
+{
+	YLispToken token = ylisp_read_token(lexer);
+	YLispValue *cell1, *cell2;
+
+	cell1 = ylisp_value(YLISP_CELL);
+	cell1->v.cell.car = ylisp_symbol_for_name("quote", 5);
+	cell1->v.cell.cdr = cell2 = ylisp_value(YLISP_CELL);
+
+	cell2->v.cell.car = parse_from_token(lexer, token);
+	cell2->v.cell.cdr = NULL;
+
+	return cell1;
+}
+
+static YLispValue *parse_from_token(YLispLexer *lexer, YLispToken token)
+{
+	switch (token) {
+		case TOKEN_OPEN_PAREN:
+			return parse_list(lexer);
+		case TOKEN_QUOTE:
+			return parse_quoted(lexer);
+		case TOKEN_NUMBER:
+		case TOKEN_STRING:
+		case TOKEN_BOOLEAN:
+		case TOKEN_SYMBOL:
+			return lexer->value;
+		case TOKEN_EOF:
+		case TOKEN_ERROR:
+		case TOKEN_CLOSE_PAREN:
+			return NULL;
+	}
+}
+
+YLispValue *ylisp_parse(char *input)
 {
 	YLispLexer lexer;
 	YLispToken token;
-	ylisp_init_lexer(&lexer, argv[1], strlen(argv[1]));
-	while ((token = ylisp_read_token(&lexer)) != TOKEN_ERROR) {
-		switch (token) {
-			case TOKEN_OPEN_PAREN: printf("("); break;
-			case TOKEN_CLOSE_PAREN: printf(")"); break;
-			case TOKEN_QUOTE: printf("'"); break;
-			case TOKEN_NUMBER:
-			case TOKEN_STRING:
-			case TOKEN_BOOLEAN:
-			case TOKEN_SYMBOL:
-				ylisp_value_print(lexer.value);
-				break;
-		}
-		printf("\n");
-	}
+	ylisp_init_lexer(&lexer, input);
+	token = ylisp_read_token(&lexer);
+	return parse_from_token(&lexer, token);
+}
+
+int main(int argc, char *argv[])
+{
+	YLispValue *value = ylisp_parse(argv[1]);
+	ylisp_print(value);
+	printf("\n");
+	return 0;
 }
 
