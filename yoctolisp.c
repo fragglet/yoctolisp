@@ -383,8 +383,7 @@ YLispToken ylisp_read_token(YLispLexer *lexer)
 		case ')': return TOKEN_CLOSE_PAREN;
 		case '\'': return TOKEN_QUOTE;
 		case '#':
-			lexer->value = ylisp_value(YLISP_BOOLEAN);
-			lexer->value->v.i = c == 't';
+			lexer->value = ylisp_number(YLISP_BOOLEAN, c == 't');
 			if (c != 't' && c != 'f')
 				return TOKEN_ERROR;
 			++lexer->position;
@@ -602,6 +601,17 @@ static YLispValue *eval_list_inner(YLispValue *context, YLispValue *code)
 		} else if (CDR(CDR(CDR(code))) != NULL) {
 			return defer_eval(context, CAR(CDR(CDR(CDR(code)))));
 		}
+	} else if (first == keywords[KWD_COND]) {
+		YLispValue *tests, *val;
+		for (tests = CDR(code); tests != NULL; tests = CDR(tests)) {
+			val = ylisp_eval(context, CAR(CAR(tests)));
+			assert(val != NULL && (val->type == YLISP_NUMBER
+			                    || val->type == YLISP_BOOLEAN));
+			if (val->v.i)
+				return run_function_body(context,
+				                         CDR(CAR(tests)));
+		}
+		return NULL;
 	} else if (first == keywords[KWD_LAMBDA]) {
 		YLispValue *result = ylisp_value(YLISP_FUNCTION);
 		result->v.func.context = context;
@@ -645,13 +655,13 @@ static YLispValue *eval_list(YLispValue *context, YLispValue *code)
 	YLispValue *result = eval_list_inner(context, code);
 
 	// Tail call optimization: expand deferred call.
-	pin_variable(&context);
 	while (result != NULL && result->type == YLISP_DEFERRED) {
 		context = result->v.func.context;
 		code = result->v.func.code;
+		pin_variable(&context);
 		result = eval_list_inner(context, code);
+		unpin_variable(&context);
 	}
-	unpin_variable(&context);
 
 	return result;
 }
