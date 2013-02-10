@@ -1,2 +1,14 @@
 Yoctolisp is a Lisp interpreter written in a weekend.
 
+Features:
+ * Read-eval-print loop.
+ * Lexical closures.
+ * Proper garbage collection.
+ * Tail call optimization.
+ * Variadic function syntax.
+
+What I didn't have time for:
+ * Continuations.
+ * Decent error handling
+ * Everything else.
+
