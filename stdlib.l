@@ -1,5 +1,5 @@
 
-; Standard library functions.
+; Yoctolisp standard library functions.
 ; This file is loaded on startup.
 
 (define (null? x) (= x '()))
@@ -24,16 +24,41 @@
     (begin (callback (car list))
            (for-each callback (cdr list)))))
 
-(define (length list)
+(define (foldl func acc list)
   (if (null? list)
-    0
-    (+ 1 (length (cdr list)))))
+    acc
+    (foldl func
+           (func acc (car list))
+           (cdr list))))
+
+(define (length list)
+  (foldl (lambda (x) (+ x 1)) 0 list))
+
+(define (sum . list) (foldl + 0 list))
+(define (product . list) (foldl * 1 list))
+
+(define (reverse-with-ending list ending)
+  (if (null? list)
+    ending
+    (reverse-with-ending
+      (cdr list)
+      (cons (car list) ending))))
+
+(define (reverse list)
+  (reverse-with-ending list '()))
 
 (define (<= x y) (not (> x y)))
 (define (>= x y) (not (< x y)))
 
-(define (min x y) (if (< x y) x y))
-(define (max x y) (if (> x y) x y))
+(define (min first . list)
+  (foldl (lambda (x y) (if (< x y) x y))
+         first
+	 list))
+
+(define (max first . list)
+  (foldl (lambda (x y) (if (> x y) x y))
+         first
+	 list))
 
 (define (id x) x)
 

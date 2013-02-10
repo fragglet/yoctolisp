@@ -546,15 +546,15 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 		newcontext->v.context.vars = NULL;
 		c = CDR(code);
 		for (n = CAR(func->v.func.code); n != NULL; n = CDR(n)) {
-			set_variable(newcontext, CAR(n),
-			             ylisp_eval(context, CAR(c)));
-			c = CDR(c);
 			// varargs:
-			if (CDR(n) != NULL && CDR(n)->type == YLISP_SYMBOL) {
-				set_variable(newcontext, CDR(n),
+			if (n->type == YLISP_SYMBOL) {
+				set_variable(newcontext, n,
 				             eval_func_args(context, c));
 				break;
 			}
+			set_variable(newcontext, CAR(n),
+			             ylisp_eval(context, CAR(c)));
+			c = CDR(c);
 		}
 		result = run_function_body(newcontext, CDR(func->v.func.code));
 		unpin_variable(&newcontext);
