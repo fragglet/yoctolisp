@@ -565,8 +565,18 @@ static YLispValue *eval_list_inner(YLispValue *context, YLispValue *code)
 		result->v.func.code = CDR(code);
 		return result;
 	} else if (first == keywords[KWD_DEFINE]) {
-		return set_variable(root_context, CAR(CDR(code)),
+		// (define (func x) ...
+		if (CAR(CDR(code))->type == YLISP_CELL) {
+			YLispValue *func = ylisp_value(YLISP_FUNCTION);
+			func->v.func.context = context;
+			func->v.func.code = ylisp_cons(CDR(CAR(CDR(code))),
+			                               CDR(CDR(code)));
+			return set_variable(root_context, CAR(CAR(CDR(code))),
+			                    func);
+		} else {
+			return set_variable(root_context, CAR(CDR(code)),
 		                    ylisp_eval(context, CAR(CDR(CDR(code)))));
+		}
 	} else if (first == keywords[KWD_LET]) {
 		YLispValue *newcontext = ylisp_value(YLISP_CONTEXT);
 		YLispValue *vars, *result;
