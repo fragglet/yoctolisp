@@ -51,7 +51,7 @@ typedef struct _YLispValue {
 
 typedef enum {
 	TOKEN_OPEN_PAREN, TOKEN_CLOSE_PAREN, TOKEN_LITERAL, TOKEN_QUOTE,
-	TOKEN_ERROR, TOKEN_EOF
+	TOKEN_ERROR, TOKEN_EOF, TOKEN_PERIOD
 } YLispToken;
 
 typedef struct {
@@ -357,6 +357,7 @@ YLispToken ylisp_read_token(YLispLexer *lexer)
 		return TOKEN_EOF;
 
 	switch (lexer->buffer[lexer->position++]) {
+		case '.': return TOKEN_PERIOD;
 		case '(': return TOKEN_OPEN_PAREN;
 		case ')': return TOKEN_CLOSE_PAREN;
 		case '\'': return TOKEN_QUOTE;
@@ -405,6 +406,15 @@ static YLispValue *parse_list(YLispLexer *lexer)
 			return NULL;
 		if (token == TOKEN_CLOSE_PAREN)
 			break;
+		// (x y . z) syntax:
+		if (token == TOKEN_PERIOD) {
+			token = ylisp_read_token(lexer);
+			*rover = parse_from_token(lexer, token);
+			token = ylisp_read_token(lexer);
+			if (token != TOKEN_CLOSE_PAREN)
+				return NULL;
+			return result;
+		}
 		*rover = ylisp_value(YLISP_CELL);
 		CAR(*rover) = parse_from_token(lexer, token);
 		rover = &CDR(*rover);
@@ -431,9 +441,7 @@ static YLispValue *parse_from_token(YLispLexer *lexer, YLispToken token)
 			return parse_quoted(lexer);
 		case TOKEN_LITERAL:
 			return lexer->value;
-		case TOKEN_EOF:
-		case TOKEN_ERROR:
-		case TOKEN_CLOSE_PAREN:
+		default:
 			break;
 	}
 	return NULL;
@@ -506,19 +514,27 @@ static YLispValue *run_function_body(YLispValue *context, YLispValue *code)
 	return NULL;
 }
 
+static YLispValue *eval_func_args(YLispValue *context, YLispValue *code)
+{
+	YLispValue *args = NULL, **a = &args, *c;
+	pin_variable(&args);
+	for (c = code; c != NULL; c = CDR(c)) {
+		*a = ylisp_value(YLISP_CELL);
+		CAR(*a) = ylisp_eval(context, CAR(c));
+		a = &CDR(*a);
+	}
+	*a = NULL;
+	unpin_variable(&args);
+	return args;
+}
+
 static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 {
 	YLispValue *func = ylisp_eval(context, CAR(code));
 
 	if (func->type == YLISP_BUILTIN) {
-		YLispValue *args = NULL, **a = &args, *c, *result;
+		YLispValue *result, *args = eval_func_args(context, CDR(code));
 		pin_variable(&args);
-		for (c = CDR(code); c != NULL; c = CDR(c)) {
-			*a = ylisp_value(YLISP_CELL);
-			CAR(*a) = ylisp_eval(context, CAR(c));
-			a = &CDR(*a);
-		}
-		*a = NULL;
 		result = func->v.builtin(args);
 		unpin_variable(&args);
 		return result;
@@ -533,6 +549,12 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 			set_variable(newcontext, CAR(n),
 			             ylisp_eval(context, CAR(c)));
 			c = CDR(c);
+			// varargs:
+			if (CDR(n) != NULL && CDR(n)->type == YLISP_SYMBOL) {
+				set_variable(newcontext, CDR(n),
+				             eval_func_args(context, c));
+				break;
+			}
 		}
 		result = run_function_body(newcontext, CDR(func->v.func.code));
 		unpin_variable(&newcontext);
