@@ -149,6 +149,25 @@ void ylisp_print(YLispValue *value)
 	}
 }
 
+static int ylisp_equal(YLispValue *v1, YLispValue *v2)
+{
+	if (v1 == NULL || v2 == NULL) {
+		return v1 == v2;
+	}
+	if (v1->type != v2->type) {
+		return 0;
+	}
+	switch (v1->type) {
+		case YLISP_STRING:
+			return !strcmp(v1->v.s, v2->v.s);
+		case YLISP_NUMBER:
+		case YLISP_BOOLEAN:
+			return v1->v.i == v2->v.i;
+		default:
+			return v1 == v2;
+	}
+}
+
 static void mark_value(YLispValue *value)
 {
 	if (value == NULL || value->marked) {
@@ -604,10 +623,10 @@ static YLispValue *builtin_div(YLispValue *args)
 
 static YLispValue *builtin_eq(YLispValue *args)
 {
-	unsigned int expected = CAR(args)->v.i;
+	YLispValue *expected = CAR(args);
 	unsigned int result = 1;
 	for (args = CDR(args); args != NULL; args = CDR(args)) {
-		if (CAR(args)->v.i != expected) {
+		if (!ylisp_equal(CAR(args), expected)) {
 			result = 0;
 			break;
 		}
