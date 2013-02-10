@@ -19,7 +19,8 @@ enum {
 typedef struct _YLispValue *(*YLispBuiltin)(struct _YLispValue *args);
 
 typedef struct _YLispValue {
-	YLispValueType type;
+	unsigned int marked :1;
+	unsigned int type :31;
 	union {
 		unsigned int i;
 		char *s;
@@ -51,11 +52,18 @@ typedef struct {
 	YLispValue *value;
 } YLispLexer;
 
+typedef struct _GCPinnedVariable {
+	YLispValue **variable;
+	struct _GCPinnedVariable *next;
+} GCPinnedVariable;
+
 static const char *keyword_names[] = {
 	"if", "cond", "quote", "lambda", "let", "define"
 };
 
-static YLispValue *values = NULL;  // Linked list
+static YLispValue *values = NULL;  // All values linked list
+static unsigned int values_alloc_count = 0;  // Allocated since last GC
+static GCPinnedVariable *pinned_vars = NULL;
 
 static YLispValue *keywords[NUM_KEYWORDS];
 
@@ -71,6 +79,7 @@ static YLispValue *ylisp_value(YLispValueType type)
 	assert(result != NULL);
 	result->type = type;
 	result->next = values; values = result;
+	++values_alloc_count;
 	return result;
 }
 
@@ -133,6 +142,99 @@ void ylisp_print(YLispValue *value)
 			printf("<builtin>");
 			break;
 	}
+}
+
+static void mark_value(YLispValue *value)
+{
+	if (value == NULL || value->marked) {
+		return;
+	}
+	value->marked = 1;
+
+	switch (value->type) {
+		case YLISP_CELL:
+			mark_value(value->v.cell.cdr);
+			mark_value(value->v.cell.car);
+			break;
+		case YLISP_SYMBOL:
+			mark_value(value->v.symname);
+			break;
+		case YLISP_CONTEXT:
+			mark_value(value->v.context.parent);
+			mark_value(value->v.context.vars);
+			break;
+		case YLISP_FUNCTION:
+			mark_value(value->v.func.context);
+			mark_value(value->v.func.code);
+			break;
+		default: break;
+	}
+}
+
+static void mark_roots(void)
+{
+	GCPinnedVariable *pin;
+	unsigned int i;
+	for (i = 0; i < num_symbols; ++i) {
+		mark_value(symbols[i]);
+	}
+	for (pin = pinned_vars; pin != NULL; pin = pin->next) {
+		mark_value(*pin->variable);
+	}
+	mark_value(root_context);
+}
+
+static void free_value(YLispValue *value)
+{
+	ylisp_print(value);
+	if (value->type == YLISP_STRING) {
+		free(value->v.s);
+	}
+	memset(value, 0xff, sizeof(value)); free(value);
+}
+
+static void sweep(void)
+{
+	YLispValue **v;
+	for (v = &values; *v != NULL; v = &(*v)->next) {
+		while (!(*v)->marked) {
+			YLispValue *next = (*v)->next;
+			free_value(*v);
+			*v = next;
+			if (next == NULL)
+				return;
+		}
+		(*v)->marked = 0;
+	}
+}
+
+static void run_gc(void)
+{
+	mark_roots();
+	sweep();
+	values_alloc_count = 0;
+}
+
+static void pin_variable(YLispValue **variable)
+{
+	GCPinnedVariable *pinned_var = malloc(sizeof(GCPinnedVariable));
+	assert(pinned_var != NULL);
+	pinned_var->variable = variable;
+	pinned_var->next = pinned_vars; pinned_vars = pinned_var;
+}
+
+static void unpin_variable(YLispValue **variable)
+{
+	GCPinnedVariable **v;
+	for (v = &pinned_vars; *v != NULL; v = &(*v)->next) {
+		if ((*v)->variable == variable) {
+			GCPinnedVariable *next = (*v)->next;
+			free(*v);
+			*v = next;
+			return;
+		}
+	}
+	assert(0);
 }
 
 static YLispValue *string_from_data(const char *data, size_t data_len)
@@ -356,15 +458,19 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 
 	if (func->type == YLISP_BUILTIN) {
 		YLispValue *args = NULL, **a = &args, *c;
+		pin_variable(&args);
 		for (c = CDR(code); c != NULL; c = CDR(c)) {
 			*a = ylisp_value(YLISP_CELL);
 			CAR(*a) = ylisp_eval(context, CAR(c));
 			a = &CDR(*a);
 		}
 		*a = NULL;
+		unpin_variable(&args);
 		return func->v.builtin(args);
 	} else if (func->type == YLISP_FUNCTION) {
-		YLispValue *n, *c, *newcontext = ylisp_value(YLISP_CONTEXT);
+		YLispValue *n, *c, *result;
+		YLispValue *newcontext = ylisp_value(YLISP_CONTEXT);
+		pin_variable(&newcontext);
 		newcontext->v.context.parent = func->v.func.context;
 		newcontext->v.context.vars = NULL;
 		c = CDR(code);
@@ -373,7 +479,9 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 			             ylisp_eval(context, CAR(c)));
 			c = CDR(c);
 		}
-		return run_function_body(newcontext, CDR(func->v.func.code));
+		result = run_function_body(newcontext, CDR(func->v.func.code));
+		unpin_variable(&newcontext);
+		return result;
 	} else {
 		fprintf(stderr, "Invalid function call\n");
 		exit(-1);
@@ -411,15 +519,15 @@ static YLispValue *eval_list(YLispValue *context, YLispValue *code)
 
 YLispValue *ylisp_eval(YLispValue *context, YLispValue *code)
 {
+	if (values_alloc_count > 100)
+		run_gc();
+
 	switch (code->type) {
-		// Variable
-		case YLISP_SYMBOL:
+		case YLISP_SYMBOL:  // Variable
 			return eval_variable(context, code);
-		// Function call or other.
-		case YLISP_CELL:
+		case YLISP_CELL:    // Function call or other.
 			return eval_list(context, code);
-		// Literals.
-		default:
+		default:            // Literals.
 			break;
 	}
 	return code;
@@ -536,12 +644,14 @@ void ylisp_init(void)
 
 int main(int argc, char *argv[])
 {
-	YLispValue *code, *value;
+	YLispValue *code = NULL, *value;
 	ylisp_init();
+	pin_variable(&code);
 	code = ylisp_parse(argv[1]);
 	value = ylisp_eval(root_context, code);
 	ylisp_print(value);
 	printf("\n");
+	unpin_variable(&code);
 	return 0;
 }
 
