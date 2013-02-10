@@ -1,8 +1,12 @@
 ; read-eval-print loop.
 
-(define repl (lambda ()
-    (print (eval (read)))
-    (repl)))
+(define repl
+  (lambda ()
+    (let ((value (read)))
+      (if (= value '())
+        '()
+	(begin (print (eval value))
+	       (repl))))))
 
 (repl)
 

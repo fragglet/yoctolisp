@@ -567,6 +567,19 @@ static YLispValue *eval_list_inner(YLispValue *context, YLispValue *code)
 	} else if (first == keywords[KWD_DEFINE]) {
 		return set_variable(root_context, CAR(CDR(code)),
 		                    ylisp_eval(context, CAR(CDR(CDR(code)))));
+	} else if (first == keywords[KWD_LET]) {
+		YLispValue *newcontext = ylisp_value(YLISP_CONTEXT);
+		YLispValue *vars, *result;
+		newcontext->v.context.parent = context;
+		pin_variable(&newcontext);
+		for (vars = CAR(CDR(code)); vars != NULL; vars = CDR(vars)) {
+			set_variable(newcontext, CAR(CAR(vars)),
+			             ylisp_eval(newcontext,
+			                        CAR(CDR(CAR(vars)))));
+		}
+		result = run_function_body(newcontext, CDR(CDR(code)));
+		unpin_variable(&newcontext);
+		return result;
 	} else if (first == keywords[KWD_BEGIN]) {
 		return run_function_body(context, CDR(code));
 	}
