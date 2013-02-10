@@ -6,6 +6,14 @@
 #include <string.h>
 #include <assert.h>
 
+//#define GC_DEBUG
+
+#ifdef GC_DEBUG  // How many objects to allocate before triggering a GC?
+#define GC_ALLOC_TRIGGER 1
+#else
+#define GC_ALLOC_TRIGGER 100
+#endif
+
 typedef enum {
 	YLISP_CELL, YLISP_STRING, YLISP_NUMBER, YLISP_BOOLEAN, YLISP_SYMBOL,
 	YLISP_CONTEXT, YLISP_FUNCTION, YLISP_BUILTIN, YLISP_DEFERRED,
@@ -219,6 +227,15 @@ static void free_value(YLispValue *value)
 static void sweep(void)
 {
 	YLispValue **v;
+#ifdef GC_DEBUG
+	for (v = &values; *v != NULL; v = &(*v)->next) {
+		if (!(*v)->marked) {
+			printf("Sweep %p: ", *v);
+			ylisp_print(*v);
+			printf("\n");
+		}
+	}
+#endif
 	for (v = &values; *v != NULL; v = &(*v)->next) {
 		while (!(*v)->marked) {
 			YLispValue *next = (*v)->next;
@@ -445,7 +462,7 @@ static YLispValue *eval_variable(YLispValue *context, YLispValue *var)
 
 	fprintf(stderr, "Undefined variable: %s\n",
 	        var->v.symname->v.s);
-	exit(-1);
+	abort();
 }
 
 static YLispValue *set_variable(YLispValue *context, YLispValue *name,
@@ -560,18 +577,20 @@ static YLispValue *eval_list(YLispValue *context, YLispValue *code)
 	YLispValue *result = eval_list_inner(context, code);
 
 	// Tail call optimization: expand deferred call.
+	pin_variable(&context);
 	while (result != NULL && result->type == YLISP_DEFERRED) {
 		context = result->v.func.context;
 		code = result->v.func.code;
 		result = eval_list_inner(context, code);
 	}
+	unpin_variable(&context);
 
 	return result;
 }
 
 YLispValue *ylisp_eval(YLispValue *context, YLispValue *code)
 {
-	if (values_alloc_count > 100)
+	if (values_alloc_count > GC_ALLOC_TRIGGER)
 		run_gc();
 
 	switch (code->type) {
