@@ -103,6 +103,11 @@ static void print_list(YLispValue *value, char *inner)
 {
 	printf("(%s", inner);
 	while (value != NULL) {
+		if (value->type != YLISP_CELL) {
+			printf(". ");
+			ylisp_print(value);
+			break;
+		}
 		ylisp_print(CAR(value));
 		value = CDR(value);
 		if (value != NULL) {
@@ -186,7 +191,6 @@ static void mark_roots(void)
 
 static void free_value(YLispValue *value)
 {
-	ylisp_print(value);
 	if (value->type == YLISP_STRING) {
 		free(value->v.s);
 	}
@@ -398,13 +402,10 @@ static YLispValue *parse_from_token(YLispLexer *lexer, YLispToken token)
 	return NULL;
 }
 
-YLispValue *ylisp_parse(char *input)
+YLispValue *ylisp_parse(YLispLexer *lexer)
 {
-	YLispLexer lexer;
-	YLispToken token;
-	ylisp_init_lexer(&lexer, input);
-	token = ylisp_read_token(&lexer);
-	return parse_from_token(&lexer, token);
+	YLispToken token = ylisp_read_token(lexer);
+	return parse_from_token(lexer, token);
 }
 
 YLispValue *ylisp_eval(YLispValue *context, YLispValue *code);
@@ -473,7 +474,7 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 	YLispValue *func = ylisp_eval(context, CAR(code));
 
 	if (func->type == YLISP_BUILTIN) {
-		YLispValue *args = NULL, **a = &args, *c;
+		YLispValue *args = NULL, **a = &args, *c, *result;
 		pin_variable(&args);
 		for (c = CDR(code); c != NULL; c = CDR(c)) {
 			*a = ylisp_value(YLISP_CELL);
@@ -481,8 +482,9 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 			a = &CDR(*a);
 		}
 		*a = NULL;
+		result = func->v.builtin(args);
 		unpin_variable(&args);
-		return func->v.builtin(args);
+		return result;
 	} else if (func->type == YLISP_FUNCTION) {
 		YLispValue *n, *c, *result;
 		YLispValue *newcontext = ylisp_value(YLISP_CONTEXT);
@@ -500,7 +502,7 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 		return result;
 	} else {
 		fprintf(stderr, "Invalid function call\n");
-		exit(-1);
+		abort();
 	}
 }
 
@@ -647,10 +649,12 @@ static YLispValue *builtin_cons(YLispValue *args)
 static YLispValue *builtin_read(YLispValue *args)
 {
 	// TODO: Make this not suck
+	YLispLexer lexer;
 	char buf[256];
 	printf("> "); fflush(stdout);
 	fgets(buf, sizeof(buf), stdin); buf[sizeof(buf) - 1] = '\0';
-	return ylisp_parse(buf);
+	ylisp_init_lexer(&lexer, buf);
+	return ylisp_parse(&lexer);
 }
 
 static YLispValue *builtin_eval(YLispValue *args)
@@ -695,16 +699,45 @@ void ylisp_init(void)
 	define_builtin("print", builtin_print);
 }
 
+static char *read_file(char *filename)
+{
+	char *result;
+	unsigned int file_size;
+	FILE *fs = fopen(filename, "r");
+	if (fs == NULL) {
+		perror("fopen");
+		exit(-1);
+	}
+	fseek(fs, 0, SEEK_END);
+	file_size = ftell(fs);
+	fseek(fs, 0, SEEK_SET);
+	result = malloc(file_size + 1); assert(result != NULL);
+	fread(result, 1, file_size, fs);
+	result[file_size] = '\0';
+	return result;
+}
+
 int main(int argc, char *argv[])
 {
-	YLispValue *code = NULL, *value;
+	YLispValue *code = NULL;
+	YLispLexer lexer;
+	char *infile;
+
+	if (argc < 2) {
+		printf("Usage: %s <filename>\n", argv[0]);
+		exit(-1);
+	}
+
+	infile = read_file(argv[1]);
 	ylisp_init();
+	ylisp_init_lexer(&lexer, infile);
+
 	pin_variable(&code);
-	code = ylisp_parse(argv[1]);
-	value = ylisp_eval(root_context, code);
-	ylisp_print(value);
-	printf("\n");
+	while ((code = ylisp_parse(&lexer)) != NULL) {
+		ylisp_eval(root_context, code);
+	}
 	unpin_variable(&code);
+
 	return 0;
 }
 
