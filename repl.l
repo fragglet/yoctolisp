@@ -3,7 +3,7 @@
 (define repl
   (lambda ()
     (let ((value (read)))
-      (if (= value '())
+      (if (null? value)
         '()
 	(begin (print (eval value))
 	       (repl))))))

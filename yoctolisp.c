@@ -791,19 +791,13 @@ static char *read_file(char *filename)
 	return result;
 }
 
-int main(int argc, char *argv[])
+static void process_file(char *filename)
 {
 	YLispValue *code = NULL;
 	YLispLexer lexer;
 	char *infile;
 
-	if (argc < 2) {
-		printf("Usage: %s <filename>\n", argv[0]);
-		exit(-1);
-	}
-
-	infile = read_file(argv[1]);
-	ylisp_init();
+	infile = read_file(filename);
 	ylisp_init_lexer(&lexer, infile);
 
 	pin_variable(&code);
@@ -812,6 +806,19 @@ int main(int argc, char *argv[])
 		ylisp_eval(root_context, code);
 	}
 	unpin_variable(&code);
+}
+
+int main(int argc, char *argv[])
+{
+	if (argc < 2) {
+		printf("Usage: %s <filename>\n", argv[0]);
+		exit(-1);
+	}
+
+	ylisp_init();
+
+	process_file("stdlib.l");
+	process_file(argv[1]);
 
 	return 0;
 }
