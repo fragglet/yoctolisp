@@ -298,6 +298,7 @@ static YLispToken ylisp_read_string(YLispLexer *lexer)
 
 	lexer->value = string_from_data(lexer->buffer + start,
 	                                lexer->position - start);
+	++lexer->position;
 	return TOKEN_LITERAL;
 }
 
@@ -734,6 +735,7 @@ int main(int argc, char *argv[])
 
 	pin_variable(&code);
 	while ((code = ylisp_parse(&lexer)) != NULL) {
+		//ylisp_print(code); printf("\n");
 		ylisp_eval(root_context, code);
 	}
 	unpin_variable(&code);
