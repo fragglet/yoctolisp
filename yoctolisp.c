@@ -21,7 +21,7 @@ typedef enum {
 
 enum {
 	KWD_IF, KWD_COND, KWD_QUOTE, KWD_LAMBDA, KWD_LET, KWD_DEFINE,
-	NUM_KEYWORDS
+	KWD_BEGIN, NUM_KEYWORDS
 };
 
 typedef struct _YLispValue *(*YLispBuiltin)(struct _YLispValue *args);
@@ -66,7 +66,7 @@ typedef struct _GCPinnedVariable {
 } GCPinnedVariable;
 
 static const char *keyword_names[] = {
-	"if", "cond", "quote", "lambda", "let", "define"
+	"if", "cond", "quote", "lambda", "let", "define", "begin"
 };
 
 static YLispValue *values = NULL;  // All values linked list
@@ -567,6 +567,8 @@ static YLispValue *eval_list_inner(YLispValue *context, YLispValue *code)
 	} else if (first == keywords[KWD_DEFINE]) {
 		return set_variable(root_context, CAR(CDR(code)),
 		                    ylisp_eval(context, CAR(CDR(CDR(code)))));
+	} else if (first == keywords[KWD_BEGIN]) {
+		return run_function_body(context, CDR(code));
 	}
 
 	return eval_func_call(context, code);
@@ -653,6 +655,18 @@ static YLispValue *builtin_eq(YLispValue *args)
 	return ylisp_number(YLISP_BOOLEAN, result);
 }
 
+static YLispValue *builtin_lt(YLispValue *args)
+{
+	return ylisp_number(YLISP_BOOLEAN,
+	                    CAR(args)->v.i < CAR(CDR(args))->v.i);
+}
+
+static YLispValue *builtin_gt(YLispValue *args)
+{
+	return ylisp_number(YLISP_BOOLEAN,
+	                    CAR(args)->v.i > CAR(CDR(args))->v.i);
+}
+
 static YLispValue *builtin_and(YLispValue *args)
 {
 	unsigned int result = 1;
@@ -675,6 +689,11 @@ static YLispValue *builtin_or(YLispValue *args)
 		}
 	}
 	return ylisp_number(YLISP_BOOLEAN, result);
+}
+
+static YLispValue *builtin_not(YLispValue *args)
+{
+	return  ylisp_number(YLISP_BOOLEAN, !CAR(args)->v.i);
 }
 
 static YLispValue *builtin_car(YLispValue *args) { return CAR(CAR(args)); }
@@ -727,9 +746,12 @@ void ylisp_init(void)
 	define_builtin("-", builtin_sub);
 	define_builtin("*", builtin_mul);
 	define_builtin("/", builtin_div);
+	define_builtin("<", builtin_lt);
+	define_builtin(">", builtin_gt);
 	define_builtin("=", builtin_eq);
 	define_builtin("and", builtin_and);
 	define_builtin("or", builtin_or);
+	define_builtin("not", builtin_not);
 	define_builtin("car", builtin_car);
 	define_builtin("cdr", builtin_cdr);
 	define_builtin("cons", builtin_cons);
