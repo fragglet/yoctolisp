@@ -614,6 +614,26 @@ static YLispValue *builtin_cons(YLispValue *args)
 	return ylisp_cons(CAR(args), CAR(CDR(args)));
 }
 
+static YLispValue *builtin_read(YLispValue *args)
+{
+	// TODO: Make this not suck
+	char buf[256];
+	printf("> "); fflush(stdout);
+	fgets(buf, sizeof(buf), stdin); buf[sizeof(buf) - 1] = '\0';
+	return ylisp_parse(buf);
+}
+
+static YLispValue *builtin_eval(YLispValue *args)
+{
+	return ylisp_eval(root_context, CAR(args));
+}
+
+static YLispValue *builtin_print(YLispValue *args)
+{
+	ylisp_print(CAR(args)); printf("\n");
+	return NULL;
+}
+
 static void define_builtin(char *name, YLispBuiltin callback)
 {
 	YLispValue *builtin = ylisp_value(YLISP_BUILTIN);
@@ -640,6 +660,9 @@ void ylisp_init(void)
 	define_builtin("car", builtin_car);
 	define_builtin("cdr", builtin_cdr);
 	define_builtin("cons", builtin_cons);
+	define_builtin("read", builtin_read);
+	define_builtin("eval", builtin_eval);
+	define_builtin("print", builtin_print);
 }
 
 int main(int argc, char *argv[])
