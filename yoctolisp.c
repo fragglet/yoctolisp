@@ -8,7 +8,7 @@
 
 typedef enum {
 	YLISP_CELL, YLISP_STRING, YLISP_NUMBER, YLISP_BOOLEAN, YLISP_SYMBOL,
-	YLISP_CONTEXT, YLISP_FUNCTION, YLISP_BUILTIN,
+	YLISP_CONTEXT, YLISP_FUNCTION, YLISP_BUILTIN, YLISP_DEFERRED,
 } YLispValueType;
 
 enum {
@@ -442,14 +442,30 @@ static YLispValue *set_variable(YLispValue *context, YLispValue *name,
 	return value;
 }
 
+static YLispValue *defer_eval(YLispValue *context, YLispValue *code)
+{
+	YLispValue *deferred;
+
+	if (code->type != YLISP_CELL) {
+		return ylisp_eval(context, code);
+	}
+
+	deferred = ylisp_value(YLISP_DEFERRED);
+	deferred->v.func.context = context;
+	deferred->v.func.code = code;
+	return deferred;
+}
+
 static YLispValue *run_function_body(YLispValue *context, YLispValue *code)
 {
-	YLispValue *result = NULL;
-	while (code != NULL) {
-		result = ylisp_eval(context, CAR(code));
-		code = CDR(code);
+	for (; code != NULL; code = CDR(code)) {
+		if (CDR(code) == NULL) {
+			return defer_eval(context, CAR(code));
+		} else {
+			ylisp_eval(context, CAR(code));
+		}
 	}
-	return result;
+	return NULL;
 }
 
 static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
@@ -488,7 +504,7 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 	}
 }
 
-static YLispValue *eval_list(YLispValue *context, YLispValue *code)
+static YLispValue *eval_list_inner(YLispValue *context, YLispValue *code)
 {
 	YLispValue *first = CAR(code);
 
@@ -500,9 +516,9 @@ static YLispValue *eval_list(YLispValue *context, YLispValue *code)
 		assert(val != NULL && (val->type == YLISP_NUMBER
 		                    || val->type == YLISP_BOOLEAN));
 		if (val->v.i) {
-			return ylisp_eval(context, CAR(CDR(CDR(code))));
+			return defer_eval(context, CAR(CDR(CDR(code))));
 		} else if (CDR(CDR(CDR(code))) != NULL) {
-			return ylisp_eval(context, CAR(CDR(CDR(CDR(code)))));
+			return defer_eval(context, CAR(CDR(CDR(CDR(code)))));
 		}
 	} else if (first == keywords[KWD_LAMBDA]) {
 		YLispValue *result = ylisp_value(YLISP_FUNCTION);
@@ -515,6 +531,20 @@ static YLispValue *eval_list(YLispValue *context, YLispValue *code)
 	}
 
 	return eval_func_call(context, code);
+}
+
+static YLispValue *eval_list(YLispValue *context, YLispValue *code)
+{
+	YLispValue *result = eval_list_inner(context, code);
+
+	// Tail call optimization: expand deferred call.
+	while (result != NULL && result->type == YLISP_DEFERRED) {
+		context = result->v.func.context;
+		code = result->v.func.code;
+		result = eval_list_inner(context, code);
+	}
+
+	return result;
 }
 
 YLispValue *ylisp_eval(YLispValue *context, YLispValue *code)
