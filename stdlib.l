@@ -18,6 +18,8 @@
 ; Yoctolisp standard library functions.
 ; This file is loaded on startup.
 
+(define (list . values) values)
+
 (define (null? x) (= x '()))
 
 (define (map callback list)
@@ -47,11 +49,51 @@
            (func acc (car list))
            (cdr list))))
 
+(define (foldr func acc list)
+  (if (null? list)
+    acc
+    (func (car list)
+          (foldr func acc (cdr list)))))
+
+(define (reduce func list)
+  (foldl func (car list) (cdr list)))
+
+(define (apply func args)
+  (eval
+    (cons func
+          (map (lambda (x) (list 'quote x))
+               args))))
+
+(define (curry func x)
+  (lambda args (apply func (cons x args))))
+
+(define (compose f g)
+  (lambda args (f (apply g args))))
+
+(define (primitive-append a b)
+  (if (null? a)
+    b
+    (cons (car a)
+          (append (cdr a) b))))
+
+(define (append . args)
+  (foldr primitive-append '() args))
+
 (define (length list)
   (foldl (lambda (x) (+ x 1)) 0 list))
 
 (define (sum . list) (foldl + 0 list))
 (define (product . list) (foldl * 1 list))
+
+(define (sort l)
+  (if (null? l)
+    l
+    (let ((pivot (car l))
+          (left (filter (lambda (x) (< x pivot)) (cdr l)))
+          (right (filter (lambda (x) (>= x pivot)) (cdr l))))
+      (append (sort left)
+              (list pivot)
+              (sort right)))))
 
 (define (reverse-with-ending list ending)
   (if (null? list)
@@ -69,12 +111,12 @@
 (define (min first . list)
   (foldl (lambda (x y) (if (< x y) x y))
          first
-	 list))
+         list))
 
 (define (max first . list)
   (foldl (lambda (x y) (if (> x y) x y))
          first
-	 list))
+         list))
 
 (define (id x) x)
 
