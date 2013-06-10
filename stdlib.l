@@ -116,7 +116,10 @@
          list))
 
 (define (+ . args) (reduce builtin-add args))
-(define (- . args) (reduce builtin-sub args))
+(define (- . args)
+  (if (null? (cdr args))  ; (- x) means (- 0 x)
+      (- 0 (car args))
+      (reduce builtin-sub args)))
 (define (* . args) (reduce builtin-mul args))
 (define (/ . args) (reduce builtin-div args))
 (define (and . args) (reduce builtin-and args))
@@ -132,7 +135,7 @@
   (lambda args
     (reduce builtin-and
             (map (lambda (pair) (apply func pair))
-	         (pairs args)))))
+                 (pairs args)))))
 
 ; Build up everything from builtin-eq and builtin-lt:
 (define (basic-gt x y) (builtin-lt y x))
