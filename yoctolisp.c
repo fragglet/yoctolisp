@@ -37,7 +37,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 typedef enum {
 	YLISP_CELL, YLISP_STRING, YLISP_NUMBER, YLISP_BOOLEAN, YLISP_SYMBOL,
-	YLISP_CONTEXT, YLISP_FUNCTION, YLISP_BUILTIN, YLISP_DEFERRED,
+	YLISP_CONTEXT, YLISP_FUNCTION, YLISP_BUILTIN
 } YLispValueType;
 
 enum {
@@ -101,6 +101,9 @@ static YLispValue **symbols = NULL;
 static unsigned int num_symbols = 0;
 
 static YLispValue *root_context;
+
+// A deferred call, passed up the stack (only one ever exists)
+static YLispValue deferred_call;
 
 static YLispValue *ylisp_value(YLispValueType type)
 {
@@ -526,16 +529,13 @@ static YLispValue *set_variable(YLispValue *context, YLispValue *name,
 
 static YLispValue *defer_eval(YLispValue *context, YLispValue *code)
 {
-	YLispValue *deferred;
-
 	if (code->type != YLISP_CELL) {
 		return ylisp_eval(context, code);
 	}
 
-	deferred = ylisp_value(YLISP_DEFERRED);
-	deferred->v.func.context = context;
-	deferred->v.func.code = code;
-	return deferred;
+	deferred_call.v.func.context = context;
+	deferred_call.v.func.code = code;
+	return &deferred_call;
 }
 
 static YLispValue *run_function_body(YLispValue *context, YLispValue *code)
@@ -671,9 +671,9 @@ static YLispValue *eval_list(YLispValue *context, YLispValue *code)
 	YLispValue *result = eval_list_inner(context, code);
 
 	// Tail call optimization: expand deferred call.
-	while (result != NULL && result->type == YLISP_DEFERRED) {
-		context = result->v.func.context;
-		code = result->v.func.code;
+	while (result == &deferred_call) {
+		context = deferred_call.v.func.context;
+		code = deferred_call.v.func.code;
 		pin_variable(&context);
 		result = eval_list_inner(context, code);
 		unpin_variable(&context);
