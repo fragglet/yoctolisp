@@ -197,6 +197,22 @@ static int ylisp_equal(YLispValue *v1, YLispValue *v2)
 	}
 }
 
+static int ylisp_lt(YLispValue *v1, YLispValue *v2)
+{
+	if (v1 == NULL || v2 == NULL || v1->type != v2->type) {
+		return 0;
+	}
+	switch (v1->type) {
+		case YLISP_STRING:
+			return strcmp(v1->v.s, v2->v.s) < 0;
+		case YLISP_NUMBER:
+		case YLISP_BOOLEAN:
+			return v1->v.i < v2->v.i;
+		default:
+			return 0;
+	}
+}
+
 static void mark_value(YLispValue *value)
 {
 	if (value == NULL || value->marked) {
@@ -684,87 +700,50 @@ YLispValue *ylisp_eval(YLispValue *context, YLispValue *code)
 
 static YLispValue *builtin_add(YLispValue *args)
 {
-	unsigned int result = 0;
-	for (; args != NULL; args = CDR(args)) {
-		result += CAR(args)->v.i;
-	}
-	return ylisp_number(YLISP_NUMBER, result);
+	return ylisp_number(YLISP_NUMBER,
+	                    CAR(args)->v.i + CAR(CDR(args))->v.i);
 }
 
 static YLispValue *builtin_sub(YLispValue *args)
 {
-	unsigned int result = CAR(args)->v.i;
-	for (args = CDR(args); args != NULL; args = CDR(args)) {
-		result -= CAR(args)->v.i;
-	}
-	return ylisp_number(YLISP_NUMBER, result);
+	return ylisp_number(YLISP_NUMBER,
+	                    CAR(args)->v.i - CAR(CDR(args))->v.i);
 }
 
 static YLispValue *builtin_mul(YLispValue *args)
 {
-	unsigned int result = 1;
-	for (; args != NULL; args = CDR(args)) {
-		result *= CAR(args)->v.i;
-	}
-	return ylisp_number(YLISP_NUMBER, result);
+	return ylisp_number(YLISP_NUMBER,
+	                    CAR(args)->v.i * CAR(CDR(args))->v.i);
 }
 
 static YLispValue *builtin_div(YLispValue *args)
 {
-	unsigned int result = CAR(args)->v.i;
-	for (args = CDR(args); args != NULL; args = CDR(args)) {
-		result /= CAR(args)->v.i;
-	}
-	return ylisp_number(YLISP_NUMBER, result);
+	return ylisp_number(YLISP_NUMBER,
+	                    CAR(args)->v.i / CAR(CDR(args))->v.i);
 }
 
 static YLispValue *builtin_eq(YLispValue *args)
 {
-	YLispValue *expected = CAR(args);
-	unsigned int result = 1;
-	for (args = CDR(args); args != NULL; args = CDR(args)) {
-		if (!ylisp_equal(CAR(args), expected)) {
-			result = 0;
-			break;
-		}
-	}
-	return ylisp_number(YLISP_BOOLEAN, result);
+	return ylisp_number(YLISP_BOOLEAN,
+	                    ylisp_equal(CAR(args), CAR(CDR(args))));
 }
 
 static YLispValue *builtin_lt(YLispValue *args)
 {
 	return ylisp_number(YLISP_BOOLEAN,
-	                    CAR(args)->v.i < CAR(CDR(args))->v.i);
-}
-
-static YLispValue *builtin_gt(YLispValue *args)
-{
-	return ylisp_number(YLISP_BOOLEAN,
-	                    CAR(args)->v.i > CAR(CDR(args))->v.i);
+	                    ylisp_lt(CAR(args), CAR(CDR(args))));
 }
 
 static YLispValue *builtin_and(YLispValue *args)
 {
-	unsigned int result = 1;
-	for (; args != NULL; args = CDR(args)) {
-		if (!CAR(args)->v.i) {
-			result = 0;
-			break;
-		}
-	}
-	return ylisp_number(YLISP_BOOLEAN, result);
+	return ylisp_number(YLISP_BOOLEAN,
+	                    CAR(args)->v.i && CAR(CDR(args))->v.i);
 }
 
 static YLispValue *builtin_or(YLispValue *args)
 {
-	unsigned int result = 0;
-	for (; args != NULL; args = CDR(args)) {
-		if (CAR(args)->v.i) {
-			result = 1;
-			break;
-		}
-	}
-	return ylisp_number(YLISP_BOOLEAN, result);
+	return ylisp_number(YLISP_BOOLEAN,
+	                    CAR(args)->v.i || CAR(CDR(args))->v.i);
 }
 
 static YLispValue *builtin_not(YLispValue *args)
@@ -818,15 +797,14 @@ void ylisp_init(void)
 		    keyword_names[i], strlen(keyword_names[i]));
 	}
 	root_context = ylisp_value(YLISP_CONTEXT);
-	define_builtin("+", builtin_add);
-	define_builtin("-", builtin_sub);
-	define_builtin("*", builtin_mul);
-	define_builtin("/", builtin_div);
-	define_builtin("<", builtin_lt);
-	define_builtin(">", builtin_gt);
-	define_builtin("=", builtin_eq);
-	define_builtin("and", builtin_and);
-	define_builtin("or", builtin_or);
+	define_builtin("builtin-add", builtin_add);
+	define_builtin("builtin-sub", builtin_sub);
+	define_builtin("builtin-mul", builtin_mul);
+	define_builtin("builtin-div", builtin_div);
+	define_builtin("builtin-lt", builtin_lt);
+	define_builtin("builtin-eq", builtin_eq);
+	define_builtin("builtin-and", builtin_and);
+	define_builtin("builtin-or", builtin_or);
 	define_builtin("not", builtin_not);
 	define_builtin("car", builtin_car);
 	define_builtin("cdr", builtin_cdr);

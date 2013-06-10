@@ -20,7 +20,7 @@
 
 (define (list . values) values)
 
-(define (null? x) (= x '()))
+(define (null? x) (builtin-eq x '()))
 
 (define (map callback list)
   (if (null? list)
@@ -105,9 +105,6 @@
 (define (reverse list)
   (reverse-with-ending list '()))
 
-(define (<= x y) (not (> x y)))
-(define (>= x y) (not (< x y)))
-
 (define (min first . list)
   (foldl (lambda (x y) (if (< x y) x y))
          first
@@ -117,6 +114,36 @@
   (foldl (lambda (x y) (if (> x y) x y))
          first
          list))
+
+(define (+ . args) (reduce builtin-add args))
+(define (- . args) (reduce builtin-sub args))
+(define (* . args) (reduce builtin-mul args))
+(define (/ . args) (reduce builtin-div args))
+(define (and . args) (reduce builtin-and args))
+(define (or . args) (reduce builtin-or args))
+
+(define (pairs l)
+  (if (null? (cdr l))
+      '()
+      (cons (list (car l) (cadr l))
+            (pairs (cdr l)))))
+
+(define (pairs-operator func)
+  (lambda args
+    (reduce builtin-and
+            (map (lambda (pair) (apply func pair))
+	         (pairs args)))))
+
+; Build up everything from builtin-eq and builtin-lt:
+(define (basic-gt x y) (builtin-lt y x))
+(define (basic-lte x y) (not (basic-gt x y)))
+(define (basic-gte x y) (not (builtin-lt x y)))
+
+(define = (pairs-operator builtin-eq))
+(define < (pairs-operator builtin-lt))
+(define > (pairs-operator basic-gt))
+(define <= (pairs-operator basic-lte))
+(define >= (pairs-operator basic-gte))
 
 (define (id x) x)
 
