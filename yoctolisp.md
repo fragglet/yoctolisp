@@ -1,5 +1,46 @@
 # Lisp in a weekend
 
+Working as a professional software engineer can be tiring: you're often
+working on a small part of a larger system, making small changes and
+fixing bugs. Over time you also learn to rigidly follow best practises:
+write code that is efficient, document your functions, always check
+error codes, etc. It's easy to forget the fun of just programming and
+the satisfaction of creating something.
+
+I set out to try to reclaim some of that fun by setting myself a
+challenge: implement a Lisp interpreter in a weekend. How much could I
+achieve? I wasn't sure but I figured it should be achievable. The nice
+thing about Lisp is the lack of syntax, meaning that parsing of the
+program text isn't difficult. But there are still lots of other things
+to take into account. I was also curious as to how small (in terms of
+lines of code) a Lisp interpreter could be.
+
+There are several languages I could have chosen to do this, and some
+would have been easier than others. A Lisp interpreter in Python, for
+example, would probably have been fairly trivial. In the end I opted
+for C, just for the challenge - I'd have to implement my own garbage
+collector rather than "cheating" by using a higher level language!
+
+In the end, I was quite happy with the result. I started on the Friday
+night and by the end of Sunday I had a complete, functioning
+interpreter. It includes most of the
+[staple Lisp features](http://www.paulgraham.com/diff.html): a
+read-eval-print loop, first-class functions with lexical closures,
+garbage collection and recursion with tail call optimization. The
+source code is less than 900 lines, though that doesn't include a
+separate file with a small "standard library" of common Lisp
+functions.
+
+I cut a lot of corners to save time. The code is much more sparsely
+commented than my normal standard and error reporting is non-existent.
+In spite of that, it's still fairly readable. There's very little in
+the way of input checking: for example, syntax errors will often cause
+the interpreter to crash due to a null pointer dereference.
+
+Below is an annotated timeline of my experience, linking to the commits
+I made over that weekend. I've made a few changes to the code since then
+but in general it's largely unchanged.
+
 ## Friday
 
 Lisp programs are made up of S-expressions, so the first step to
