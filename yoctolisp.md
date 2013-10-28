@@ -143,7 +143,7 @@ As well as allocating and initializing a new `YLispValue`, it also adds
 the new value onto a linked list of allocated values. Later on I'll
 use this for the sweep stage of the garbage collector.
 
-One other thing: some will rightly criticize the use of a use of a
+One other thing: some will rightly criticize the use of a
 heap-allocated structure just to hold a simple integer value. Proper
 virtual machines use a trick called
 [pointer tagging](http://nikic.github.com/2012/02/02/Pointer-magic-for-efficient-dynamic-value-representations.html)
