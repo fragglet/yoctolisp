@@ -41,6 +41,11 @@ Below is an annotated timeline of my experience, linking to the commits
 I made over that weekend. I've made a few changes to the code since then
 but in general it's largely unchanged.
 
+I name the resulting language Yoctolisp (yocto- is the SI prefix for
+10<sup>-24</sup>, and all the preceding "small" prefixes have already
+been used). It's reminiscent of Scheme, mostly because Scheme is the
+only dialect of Lisp that I know to any practical extent.
+
 ## Friday
 
 Lisp programs are made up of S-expressions, so the first step to
@@ -282,6 +287,15 @@ directly though, it's difficult to do better.
 The [original Lisp paper](http://www-formal.stanford.edu/jmc/recursive.html)
 did something similar (association lists).
 
+If we were writing a compiler, it would be possible to do much more
+efficient optimizations: we could analyze the variables used within
+each function and construct a carefully packed memory layout to store
+each variable (conceptually the same as how a C compiler defines a
+stack frame). However, Yoctolisp is an interpreter and (aside from
+parsing S-expressions) does no kind of analysis of program structure
+at all! Because of this, the options available for doing this
+efficiently are very limited.
+
 #### Functions
 
 Having defined how variables are stored, I define functions as another
@@ -356,8 +370,9 @@ into the root context at startup.
 
 ## Sunday
 
-At this point I have the basic foundations in place. From this point
-on, what remains is a matter of fleshing out what's in place and
+At this point I have the basic foundations in place and can evaluate
+simple expressions by providing them on the command line. From this
+point on, what remains is a matter of fleshing out what's in place and
 polishing.
 
 ### commit [6fc255](https://github.com/fragglet/yoctolisp/commit/6fc255)
@@ -397,6 +412,16 @@ a value being freed unexpectedly. I eventually had to track down a
 couple of bugs related to this before I got it right. To make bugs
 more obvious, values are `memset()` to clear their contents before
 they are freed.
+
+The garbage collector is very crude. One problem is that it just
+uses C's native allocator and doesn't make any attempt at managing
+memory. Classic Lisp used
+[copying garbage collection](https://en.wikipedia.org/wiki/Cheney%27s_algorithm
+schemes, which have the advantage that surviving memory is compacted
+as part of the process. If we wanted to be really elaborate we'd use
+generational garbage collection, which can help to reduce pauses, but
+that's more than is probably feasible in a weekend.
+
 
 ### commit [c5cc40](https://github.com/fragglet/yoctolisp/commit/c5cc40)
 
@@ -462,6 +487,13 @@ is deferred:
 The list evaluation code is then wrapped so that deferred calls are
 unwrapped and re-evaluated, until a real value is returned.
 
+Several days after I finished the project I discovered a simpler way
+of doing this. We only ever pass the deferred call up the call chain,
+so only one `YLISP_DEFERRED` object can ever exist. It's therefore
+possible to avoid allocating a new `YLispValue` each time and just
+use a static one that gets reused
+(see commit [cec04b](https://github.com/fragglet/yoctolisp/commit/cec04b)).
+
 ### commit [9f1936](https://github.com/fragglet/yoctolisp/commit/9f1936)
 
 Up until now, all expressions are still being evaluated from the
@@ -497,6 +529,12 @@ This commit adds less-than, greater-than and negation builtin
 functions, and also adds handling for the `begin` keyword. The latter
 turns out to be easy to handle as the function call body code can
 simply be reused.
+
+After the weekend was over I later came back and
+[simplified](https://github.com/fragglet/yoctolisp/commit/14f4d72)
+how the comparison operators are implemented. I moved much of the
+logic for the comparison operators into Lisp code: all comparisons
+can be defined in terms of the `=` and `<` comparisons.
 
 ### commit [6238da](https://github.com/fragglet/yoctolisp/commit/6238da)
 
