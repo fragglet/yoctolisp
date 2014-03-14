@@ -27,17 +27,9 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #include <string.h>
 #include <assert.h>
 
-//#define GC_DEBUG
-
-#ifdef GC_DEBUG  // How many objects to allocate before triggering a GC?
-#define GC_ALLOC_TRIGGER 1
-#else
-#define GC_ALLOC_TRIGGER 100
-#endif
-
 typedef enum {
 	YLISP_CELL, YLISP_STRING, YLISP_NUMBER, YLISP_BOOLEAN, YLISP_SYMBOL,
-	YLISP_CONTEXT, YLISP_FUNCTION, YLISP_BUILTIN
+	YLISP_CONTEXT, YLISP_FUNCTION, YLISP_BUILTIN, YLISP_MOVED
 } YLispValueType;
 
 enum {
@@ -48,8 +40,7 @@ enum {
 typedef struct _YLispValue *(*YLispBuiltin)(struct _YLispValue *args);
 
 typedef struct _YLispValue {
-	unsigned int marked :1;
-	unsigned int type :31;
+	unsigned int type;
 	union {
 		unsigned int i;
 		char *s;
@@ -63,9 +54,9 @@ typedef struct _YLispValue {
 		struct {
 			struct _YLispValue *context, *code;
 		} func;
+		struct _YLispValue *newlocation;
 		YLispBuiltin builtin;
 	} v;
-	struct _YLispValue *next;
 } YLispValue;
 #define CAR(val) ((val)->v.cell.car)
 #define CDR(val) ((val)->v.cell.cdr)
@@ -90,9 +81,11 @@ static const char *keyword_names[] = {
 	"if", "cond", "quote", "lambda", "let", "define", "begin"
 };
 
-static YLispValue *values = NULL;  // All values linked list
-static unsigned int values_alloc_count = 0;  // Allocated since last GC
-static GCPinnedVariable *pinned_vars = NULL;
+static void run_gc(void);
+
+static YLispValue *zone;  // Array of YLispValue structs
+static int zone_allocated, zone_length;
+static int last_heap_size = 0;
 
 static YLispValue *keywords[NUM_KEYWORDS];
 
@@ -100,18 +93,28 @@ static YLispValue *keywords[NUM_KEYWORDS];
 static YLispValue **symbols = NULL;
 static unsigned int num_symbols = 0;
 
+static YLispValue **top_of_stack;
 static YLispValue *root_context;
 
 // A deferred call, passed up the stack (only one ever exists)
 static YLispValue deferred_call;
 
+static void init_zone(int size)
+{
+	zone_allocated = 1;
+	zone_length = size;  // initial default
+	zone = calloc(sizeof(YLispValue), zone_length);
+	assert(zone != NULL);
+}
+
 static YLispValue *ylisp_value(YLispValueType type)
 {
-	YLispValue *result = calloc(1, sizeof(YLispValue));
-	assert(result != NULL);
+	YLispValue *result;
+	if (zone_allocated >= zone_length)
+		run_gc();
+	result = &zone[zone_allocated++];
+	memset(result, 0, sizeof(YLispValue));
 	result->type = type;
-	result->next = values; values = result;
-	++values_alloc_count;
 	return result;
 }
 
@@ -216,105 +219,118 @@ static int ylisp_lt(YLispValue *v1, YLispValue *v2)
 	}
 }
 
-static void mark_value(YLispValue *value)
+static void copy_value(YLispValue **value)
 {
-	if (value == NULL || value->marked) {
+	YLispValue *newvalue;
+	if (*value == NULL) {
 		return;
 	}
-	value->marked = 1;
+	// Already moved to new space?
+	if ((*value)->type == YLISP_MOVED) {
+		*value = (*value)->v.newlocation;
+		return;
+	}
+	// Copy to new space and overwrite original
+	assert(zone_allocated < zone_length);
+	newvalue = &zone[zone_allocated++];
+	*newvalue = **value;
+	(*value)->type = YLISP_MOVED;
+	(*value)->v.newlocation = newvalue;
+	*value = newvalue;
 
-	switch (value->type) {
+	switch (newvalue->type) {
 		case YLISP_CELL:
-			mark_value(value->v.cell.cdr);
-			mark_value(value->v.cell.car);
+			// CDR first to keep lists contiguous in memory:
+			copy_value(&newvalue->v.cell.cdr);
+			copy_value(&newvalue->v.cell.car);
 			break;
 		case YLISP_SYMBOL:
-			mark_value(value->v.symname);
+			copy_value(&newvalue->v.symname);
 			break;
 		case YLISP_CONTEXT:
-			mark_value(value->v.context.parent);
-			mark_value(value->v.context.vars);
+			copy_value(&newvalue->v.context.parent);
+			copy_value(&newvalue->v.context.vars);
 			break;
 		case YLISP_FUNCTION:
-			mark_value(value->v.func.context);
-			mark_value(value->v.func.code);
+			copy_value(&newvalue->v.func.context);
+			copy_value(&newvalue->v.func.code);
 			break;
 		default: break;
 	}
 }
 
-static void mark_roots(void)
+static void copy_roots(YLispValue *oldzone, unsigned int oldzone_size)
 {
-	GCPinnedVariable *pin;
+	YLispValue **ptr;
+	YLispValue *marker;
 	unsigned int i;
-	for (i = 0; i < num_symbols; ++i) {
-		mark_value(symbols[i]);
+	for (i = 0; i < NUM_KEYWORDS; ++i) {
+		copy_value(&keywords[i]);
 	}
-	for (pin = pinned_vars; pin != NULL; pin = pin->next) {
-		mark_value(*pin->variable);
-	}
-	mark_value(root_context);
-}
-
-static void free_value(YLispValue *value)
-{
-	if (value->type == YLISP_STRING) {
-		free(value->v.s);
-	}
-	memset(value, 0xff, sizeof(value)); free(value);
-}
-
-static void sweep(void)
-{
-	YLispValue **v;
-#ifdef GC_DEBUG
-	for (v = &values; *v != NULL; v = &(*v)->next) {
-		if (!(*v)->marked) {
-			printf("Sweep %p: ", *v);
-			ylisp_print(*v);
-			printf("\n");
+	// Stack is littered with YLispValue pointers. Walk up it and
+	// fix/mark them. This is deep evil magic.
+	if (&marker < top_of_stack) {
+		for (ptr = &marker; ptr < top_of_stack; ++ptr) {
+			if (*ptr > oldzone && *ptr < oldzone + oldzone_size) {
+				copy_value(ptr);
+			}
+		}
+	} else {
+		for (ptr = &marker; ptr > top_of_stack; --ptr) {
+			if (*ptr > oldzone && *ptr < oldzone + oldzone_size) {
+				copy_value(ptr);
+			}
 		}
 	}
-#endif
-	for (v = &values; *v != NULL; v = &(*v)->next) {
-		while (!(*v)->marked) {
-			YLispValue *next = (*v)->next;
-			free_value(*v);
-			*v = next;
-			if (next == NULL)
-				return;
+	copy_value(&root_context);
+}
+
+static void gc_fixup_symbols(void)
+{
+	unsigned int i, new_length;
+	// Some of the symbols in symbols[] may have been garbage collected.
+	// Fix symbol pointers and drop any symbols not moved during GC.
+	for (i = 0, new_length = 0; i < num_symbols; ++i) {
+		if (symbols[i]->type == YLISP_MOVED) {
+			symbols[new_length++] = symbols[i]->v.newlocation;
 		}
-		(*v)->marked = 0;
 	}
+	num_symbols = new_length;
+}
+
+static void free_old_zone(YLispValue *oldzone, unsigned int oldzone_size)
+{
+	unsigned int i;
+	// Most values that have been copied over to the new space have
+	// been set to YLISP_MOVED; what's left is garbage.
+	for (i = 0; i < oldzone_size; ++i) {
+		switch (oldzone[i].type) {
+			case YLISP_STRING:
+				free(oldzone[i].v.s);
+				break;
+			default:
+				break;
+		}
+	}
+
+	free(oldzone);
 }
 
 static void run_gc(void)
 {
-	mark_roots();
-	sweep();
-	values_alloc_count = 0;
-}
-
-static void pin_variable(YLispValue **variable)
-{
-	GCPinnedVariable *pinned_var = malloc(sizeof(GCPinnedVariable));
-	assert(pinned_var != NULL);
-	pinned_var->variable = variable;
-	pinned_var->next = pinned_vars; pinned_vars = pinned_var;
-}
-
-static void unpin_variable(YLispValue **variable)
-{
-	GCPinnedVariable **v;
-	for (v = &pinned_vars; *v != NULL; v = &(*v)->next) {
-		if ((*v)->variable == variable) {
-			GCPinnedVariable *next = (*v)->next;
-			free(*v);
-			*v = next;
-			return;
-		}
-	}
-	assert(0);
+	YLispValue *oldzone = zone;
+	unsigned int oldzone_size = zone_length, newzone_size;
+	oldzone = zone; oldzone_size = zone_length;
+	// Calculate new zone size. We need at least as much space for
+	// the current zone.
+	newzone_size = last_heap_size * 2;
+	if (newzone_size < zone_allocated + 1)
+		newzone_size = zone_allocated * 2;
+	init_zone(newzone_size);   // start a new zone
+	copy_roots(oldzone, oldzone_size);
+	gc_fixup_symbols();
+	free_old_zone(oldzone, oldzone_size);
+	//printf("GC: Post-GC heap size: %i cells\n", zone_allocated);
 }
 
 static YLispValue *string_from_data(const char *data, size_t data_len)
@@ -330,7 +346,7 @@ static YLispValue *string_from_data(const char *data, size_t data_len)
 
 YLispValue *ylisp_symbol_for_name(const char *name, size_t name_len)
 {
-	YLispValue *result, *symname;
+	YLispValue *result, *symname, *symstr;
 	unsigned int i;
 
 	for (i = 0; i < num_symbols; ++i) {
@@ -341,8 +357,9 @@ YLispValue *ylisp_symbol_for_name(const char *name, size_t name_len)
 		}
 	}
 
+	symstr = string_from_data(name, name_len);
 	result = ylisp_value(YLISP_SYMBOL);
-	result->v.symname = string_from_data(name, name_len);
+	result->v.symname = symstr;
 
 	symbols = realloc(symbols, sizeof(*symbols) * (num_symbols + 1));
 	assert(symbols != NULL);
@@ -437,10 +454,12 @@ static YLispValue *parse_from_token(YLispLexer *lexer, YLispToken token);
 
 static YLispValue *parse_list(YLispLexer *lexer)
 {
-	YLispValue *result, **rover=&result;
+	YLispValue *result = NULL, *tail;
 
 	for (;;) {
 		YLispToken token = ylisp_read_token(lexer);
+		YLispValue *newtail;
+
 		if (token == TOKEN_EOF || token == TOKEN_ERROR)
 			return NULL;
 		if (token == TOKEN_CLOSE_PAREN)
@@ -448,18 +467,24 @@ static YLispValue *parse_list(YLispLexer *lexer)
 		// (x y . z) syntax:
 		if (token == TOKEN_PERIOD) {
 			token = ylisp_read_token(lexer);
-			*rover = parse_from_token(lexer, token);
+			newtail = parse_from_token(lexer, token);
 			token = ylisp_read_token(lexer);
 			if (token != TOKEN_CLOSE_PAREN)
 				return NULL;
+			CDR(tail) = newtail;
 			return result;
 		}
-		*rover = ylisp_value(YLISP_CELL);
-		CAR(*rover) = parse_from_token(lexer, token);
-		rover = &CDR(*rover);
+		newtail = ylisp_value(YLISP_CELL);
+		CAR(newtail) = parse_from_token(lexer, token);
+		CDR(newtail) = NULL;
+		if (result == NULL) {
+			result = newtail;
+		} else {
+			CDR(tail) = newtail;
+		}
+		tail = newtail;
 	}
 
-	*rover = NULL;  // end of list
 	return result;
 }
 
@@ -552,15 +577,18 @@ static YLispValue *run_function_body(YLispValue *context, YLispValue *code)
 
 static YLispValue *eval_func_args(YLispValue *context, YLispValue *code)
 {
-	YLispValue *args = NULL, **a = &args, *c;
-	pin_variable(&args);
+	YLispValue *args = NULL, *c, *tail = NULL;
 	for (c = code; c != NULL; c = CDR(c)) {
-		*a = ylisp_value(YLISP_CELL);
-		CAR(*a) = ylisp_eval(context, CAR(c));
-		a = &CDR(*a);
+		YLispValue *newtail = ylisp_value(YLISP_CELL);
+		CAR(newtail) = ylisp_eval(context, CAR(c));
+		if (tail == NULL) {
+			args = newtail;
+			CDR(newtail) = NULL;
+		} else {
+			CDR(tail) = newtail;
+		}
+		tail = newtail;
 	}
-	*a = NULL;
-	unpin_variable(&args);
 	return args;
 }
 
@@ -570,14 +598,11 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 
 	if (func->type == YLISP_BUILTIN) {
 		YLispValue *result, *args = eval_func_args(context, CDR(code));
-		pin_variable(&args);
 		result = func->v.builtin(args);
-		unpin_variable(&args);
 		return result;
 	} else if (func->type == YLISP_FUNCTION) {
 		YLispValue *n, *c, *result;
 		YLispValue *newcontext = ylisp_value(YLISP_CONTEXT);
-		pin_variable(&newcontext);
 		newcontext->v.context.parent = func->v.func.context;
 		newcontext->v.context.vars = NULL;
 		c = CDR(code);
@@ -593,7 +618,6 @@ static YLispValue *eval_func_call(YLispValue *context, YLispValue *code)
 			c = CDR(c);
 		}
 		result = run_function_body(newcontext, CDR(func->v.func.code));
-		unpin_variable(&newcontext);
 		return result;
 	} else {
 		fprintf(stderr, "Invalid function call\n");
@@ -650,14 +674,12 @@ static YLispValue *eval_list_inner(YLispValue *context, YLispValue *code)
 		YLispValue *newcontext = ylisp_value(YLISP_CONTEXT);
 		YLispValue *vars, *result;
 		newcontext->v.context.parent = context;
-		pin_variable(&newcontext);
 		for (vars = CAR(CDR(code)); vars != NULL; vars = CDR(vars)) {
 			set_variable(newcontext, CAR(CAR(vars)),
 			             ylisp_eval(newcontext,
 			                        CAR(CDR(CAR(vars)))));
 		}
 		result = run_function_body(newcontext, CDR(CDR(code)));
-		unpin_variable(&newcontext);
 		return result;
 	} else if (first == keywords[KWD_BEGIN]) {
 		return run_function_body(context, CDR(code));
@@ -674,9 +696,7 @@ static YLispValue *eval_list(YLispValue *context, YLispValue *code)
 	while (result == &deferred_call) {
 		context = deferred_call.v.func.context;
 		code = deferred_call.v.func.code;
-		pin_variable(&context);
 		result = eval_list_inner(context, code);
-		unpin_variable(&context);
 	}
 
 	return result;
@@ -684,9 +704,6 @@ static YLispValue *eval_list(YLispValue *context, YLispValue *code)
 
 YLispValue *ylisp_eval(YLispValue *context, YLispValue *code)
 {
-	if (values_alloc_count > GC_ALLOC_TRIGGER)
-		run_gc();
-
 	switch (code->type) {
 		case YLISP_SYMBOL:  // Variable
 			return eval_variable(context, code);
@@ -792,6 +809,7 @@ static void define_builtin(char *name, YLispBuiltin callback)
 void ylisp_init(void)
 {
 	unsigned int i;
+	init_zone(1024);  // initial size
 	for (i = 0; i < NUM_KEYWORDS; ++i) {
 		keywords[i] = ylisp_symbol_for_name(
 		    keyword_names[i], strlen(keyword_names[i]));
@@ -841,21 +859,22 @@ static void process_file(char *filename)
 	infile = read_file(filename);
 	ylisp_init_lexer(&lexer, infile);
 
-	pin_variable(&code);
 	while ((code = ylisp_parse(&lexer)) != NULL) {
 		//ylisp_print(code); printf("\n");
 		ylisp_eval(root_context, code);
 	}
-	unpin_variable(&code);
 }
 
 int main(int argc, char *argv[])
 {
+	YLispValue *marker;
+
 	if (argc < 2) {
 		printf("Usage: %s <filename>\n", argv[0]);
 		exit(-1);
 	}
 
+	top_of_stack = &marker;
 	ylisp_init();
 
 	process_file("stdlib.l");
