@@ -261,7 +261,7 @@ static void free_value(YLispValue *value)
 	if (value->type == YLISP_STRING) {
 		free(value->v.s);
 	}
-	memset(value, 0xff, sizeof(value)); free(value);
+	memset(value, 0xff, sizeof(*value)); free(value);
 }
 
 static void sweep(void)
