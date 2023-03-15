@@ -417,7 +417,7 @@ they are freed.
 The garbage collector is very crude. One problem is that it just
 uses C's native allocator and doesn't make any attempt at managing
 memory. Classic Lisp used
-[copying garbage collection](https://en.wikipedia.org/wiki/Cheney%27s_algorithm
+[copying garbage collection](https://en.wikipedia.org/wiki/Cheney%27s_algorithm)
 schemes, which have the advantage that surviving memory is compacted
 as part of the process. If we wanted to be really elaborate we'd use
 generational garbage collection, which can help to reduce pauses, but
